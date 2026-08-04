@@ -5,6 +5,8 @@ let
   githubSshKey = "${config.home.homeDirectory}/.ssh/id_ed25519_github";
   githubUsername = "vyshakg";
   githubEmail = "vyshak.g.gowda@gmail.com";
+  # Homebrew's nvm formula, not a Nix package - it manages its own Node installs in ~/.nvm.
+  nvmScript = "/opt/homebrew/opt/nvm/nvm.sh";
 in
 
 {
@@ -31,6 +33,8 @@ in
     syntaxHighlighting.enable = true;  # commands turn green when valid
     initContent = ''
       bindkey '^f' autosuggest-accept
+      export NVM_DIR="$HOME/.nvm"
+      [ -s "${nvmScript}" ] && \. "${nvmScript}"
     '';
     shellAliases = {
       ".." = "cd ..";
@@ -52,6 +56,23 @@ in
       $DRY_RUN_CMD ${pkgs.openssh}/bin/ssh-keygen -t ed25519 -f "${githubSshKey}" -N "" -C "${githubUsername}@github"
       echo "Generated a new GitHub SSH key. Add this public key to https://github.com/settings/keys:"
       $DRY_RUN_CMD cat "${githubSshKey}.pub"
+    fi
+  '';
+
+  # Installs Node's current stable release via nvm (Homebrew) on first activation
+  # and pins it as the default, so a plain `node` works in every new shell.
+  home.activation.installNodeStable = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    if [ -s "${nvmScript}" ]; then
+      (
+        export PATH="/usr/bin:/usr/sbin:/bin:$PATH"
+        export NVM_DIR="${config.home.homeDirectory}/.nvm"
+        $DRY_RUN_CMD mkdir -p "$NVM_DIR"
+        . "${nvmScript}"
+        $DRY_RUN_CMD nvm install stable
+        $DRY_RUN_CMD nvm alias default stable
+      )
+    else
+      echo "nvm not found at ${nvmScript} yet - rerun ./rebuild.sh once Homebrew has installed it to install Node stable."
     fi
   '';
 

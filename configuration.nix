@@ -37,6 +37,8 @@
     brews = [
       "herdr"
       "git"
+      "nvm"
+      "opencode"
     ];
     casks = [
       "wezterm"
