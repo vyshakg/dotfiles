@@ -39,6 +39,7 @@
       "git"
       "nvm"
       "opencode"
+      "uv"
     ];
     casks = [
       "wezterm"

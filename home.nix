@@ -5,8 +5,8 @@ let
   githubSshKey = "${config.home.homeDirectory}/.ssh/id_ed25519_github";
   githubUsername = "vyshakg";
   githubEmail = "vyshak.g.gowda@gmail.com";
-  # Homebrew's nvm formula, not a Nix package - it manages its own Node installs in ~/.nvm.
   nvmScript = "/opt/homebrew/opt/nvm/nvm.sh";
+  uvScript = "/opt/homebrew/opt/uv/bin/uv";
 in
 
 {
@@ -26,6 +26,7 @@ in
   ];
   fonts.fontconfig.enable = true;
   home.sessionVariables.EDITOR = "nvim";
+  home.sessionPath = [ "${config.home.homeDirectory}/.local/bin" ];
 
   programs.zsh = {
     enable = true;
@@ -45,10 +46,6 @@ in
       cc = "claude --dangerously-skip-permissions";
     };
   };
-
-  # Generates a dedicated GitHub keypair on first activation if one isn't
-  # already there. You still have to add the printed public key to
-  # https://github.com/settings/keys yourself - Nix won't do that part.
   home.activation.generateGithubSshKey = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     if [ ! -f "${githubSshKey}" ]; then
       $DRY_RUN_CMD mkdir -p "${config.home.homeDirectory}/.ssh"
@@ -59,8 +56,6 @@ in
     fi
   '';
 
-  # Installs Node's current stable release via nvm (Homebrew) on first activation
-  # and pins it as the default, so a plain `node` works in every new shell.
   home.activation.installNodeStable = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     if [ -s "${nvmScript}" ]; then
       (
@@ -76,6 +71,17 @@ in
     fi
   '';
 
+  home.activation.installPythonStable = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    if [ -x "${uvScript}" ]; then
+      (
+        export PATH="/usr/bin:/usr/sbin:/bin:$PATH"
+        $DRY_RUN_CMD "${uvScript}" python install 3.12 --default --preview-features python-install-default
+      )
+    else
+      echo "uv not found at ${uvScript} yet - rerun ./rebuild.sh once Homebrew has installed it to install Python."
+    fi
+  '';
+
   programs.git = {
     enable = true;
     settings.user = {
@@ -86,8 +92,6 @@ in
 
   programs.ssh = {
     enable = true;
-    # Skip home-manager's legacy ssh_config(5) defaults (ForwardAgent, Compression,
-    # etc.) - they're the same as OpenSSH's own built-in defaults anyway.
     enableDefaultConfig = false;
     settings."github.com" = {
       HostName = "github.com";
