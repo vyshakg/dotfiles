@@ -40,11 +40,15 @@
       "nvm"
       "opencode"
       "uv"
+      "openjdk@21"
     ];
     casks = [
       "wezterm"
       "claude-code"
       "visual-studio-code"
+      "docker-desktop"
+      "bruno"
+      "notion"
     ];
   };
 }
