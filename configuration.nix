@@ -49,6 +49,8 @@
       "docker-desktop"
       "bruno"
       "notion"
+      "beekeeper-studio"
+      "opensuperwhisper"
     ];
   };
 }
