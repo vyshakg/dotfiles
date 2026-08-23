@@ -38,7 +38,7 @@
       "herdr"
       "git"
       "nvm"
-      "opencode"
+      "pi-coding-agent"
       "uv"
       "openjdk@21"
     ];
@@ -50,6 +50,7 @@
       "bruno"
       "notion"
       "beekeeper-studio"
+      "claude"
       "opensuperwhisper"
     ];
   };
