@@ -52,6 +52,7 @@
       "beekeeper-studio"
       "claude"
       "opensuperwhisper"
+      "obsidian"
     ];
   };
 }
