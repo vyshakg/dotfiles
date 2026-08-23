@@ -53,6 +53,7 @@
       "claude"
       "opensuperwhisper"
       "obsidian"
+      "nordvpn"
     ];
   };
 }
