@@ -1,18 +1,18 @@
 {
+  "respondToBashCommands": false,
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh",
     "padding": 2
   },
   "effortLevel": "medium",
-  "respondToBashCommands": false,
   "tui": "fullscreen",
-  "skipDangerousModePermissionPrompt": true,
-  "theme": "dark-ansi",
-  "agentPushNotifEnabled": true,
-  "voiceEnabled": true,
   "voice": {
     "enabled": true,
     "mode": "hold"
-  }
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "theme": "dark-ansi",
+  "agentPushNotifEnabled": true,
+  "voiceEnabled": true
 }
