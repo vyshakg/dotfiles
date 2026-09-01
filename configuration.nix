@@ -41,6 +41,9 @@
       "pi-coding-agent"
       "uv"
       "openjdk@21"
+      "cocoapods"
+      "doctl"
+      "terraform"
     ];
     casks = [
       "wezterm"
@@ -54,6 +57,8 @@
       "opensuperwhisper"
       "obsidian"
       "nordvpn"
+      "automic-vault/isotopes/automic-vault"
+      "flutter"
     ];
   };
 }

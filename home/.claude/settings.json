@@ -1,11 +1,45 @@
 {
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5",
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_REGION": "us-east-1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "us.anthropic.claude-opus-5[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us.anthropic.claude-sonnet-5[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  },
+  "model": "opus[1m]",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/Users/batman/.claude/hooks/herdr-agent-state.sh' session",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
   "respondToBashCommands": false,
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh",
     "padding": 2
   },
-  "effortLevel": "medium",
+  "enabledPlugins": {
+    "dart-flutter@dart-flutter": true
+  },
+  "extraKnownMarketplaces": {
+    "dart-flutter": {
+      "source": {
+        "source": "github",
+        "repo": "flutter/agent-plugins"
+      }
+    }
+  },
+  "effortLevel": "xhigh",
   "tui": "fullscreen",
   "voice": {
     "enabled": true,
