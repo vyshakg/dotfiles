@@ -34,6 +34,10 @@
     onActivation.cleanup = "zap";  # remove anything not listed here
     onActivation.autoUpdate = true;
     onActivation.extraFlags = [ "--force" ];
+    taps = [
+      "automic-vault/isotopes"
+      "hashicorp/tap"
+    ];
     brews = [
       "herdr"
       "git"
@@ -43,11 +47,12 @@
       "openjdk@21"
       "cocoapods"
       "doctl"
-      "terraform"
+      "hashicorp/tap/terraform"
+      "gh"
     ];
     casks = [
       "wezterm"
-      "claude-code"
+      "claude-code@latest"
       "visual-studio-code"
       "docker-desktop"
       "bruno"
@@ -59,6 +64,7 @@
       "nordvpn"
       "automic-vault/isotopes/automic-vault"
       "flutter"
+      "citrix-workspace"
     ];
   };
 }
