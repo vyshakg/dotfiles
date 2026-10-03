@@ -138,6 +138,8 @@ in
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/settings.json";
   home.file.".claude/statusline.sh".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/statusline.sh";
+  home.file.".claude/hooks/md-log.mjs".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/hooks/md-log.mjs";
   home.file.".pi/agent/settings.json".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.pi/agent/settings.json";
   home.file.".pi/agent/extensions".source =
