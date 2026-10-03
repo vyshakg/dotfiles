@@ -1,5 +1,8 @@
 .DS_Store
 *.log
-home/.config/herdr/.plugins.lock
-home/.config/herdr/session.json
-home/.config/herdr/release-notes.json
+**/herdr/.plugins.lock
+**/herdr/session.json
+**/herdr/release-notes.json
+**/session-snapshots/**
+**/herdr.sock*
+**/herdr-client*
