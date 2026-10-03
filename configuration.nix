@@ -49,6 +49,7 @@
       "doctl"
       "hashicorp/tap/terraform"
       "gh"
+      "librsvg"
     ];
     casks = [
       "wezterm"

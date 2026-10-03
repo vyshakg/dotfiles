@@ -82,6 +82,17 @@ in
     fi
   '';
 
+  home.activation.installTavilyCli = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    if [ -x "${uvScript}" ]; then
+      (
+        export PATH="/usr/bin:/usr/sbin:/bin:$PATH"
+        $DRY_RUN_CMD "${uvScript}" tool install tavily-cli
+      )
+    else
+      echo "uv not found at ${uvScript} yet - rerun ./rebuild.sh once Homebrew has installed it to install the Tavily CLI."
+    fi
+  '';
+
   programs.git = {
     enable = true;
     settings.user = {
@@ -127,5 +138,37 @@ in
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/settings.json";
   home.file.".claude/statusline.sh".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/statusline.sh";
+  home.file.".pi/agent/settings.json".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.pi/agent/settings.json";
+  home.file.".pi/agent/extensions".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.pi/agent/extensions";
+
+  home.activation.installPiExtensionDeps = lib.hm.dag.entryAfter [ "installNodeStable" ] ''
+    (
+      export PATH="/opt/homebrew/bin:/usr/bin:/usr/sbin:/bin:$PATH"
+      export NVM_DIR="${config.home.homeDirectory}/.nvm"
+      [ -s "${nvmScript}" ] && . "${nvmScript}"
+      if command -v npm >/dev/null; then
+        for lock in "${dotfiles}"/home/.pi/agent/extensions/*/package-lock.json; do
+          dir="$(dirname "$lock")"
+          grep -q '"dependencies"' "$dir/package.json" || continue
+          if [ ! -d "$dir/node_modules" ] || [ "$lock" -nt "$dir/node_modules" ]; then
+            $DRY_RUN_CMD sh -c 'cd "$1" && npm ci --omit=dev --omit=peer --no-audit --no-fund' _ "$dir" \
+              || echo "npm ci failed in $dir - rerun ./rebuild.sh"
+          fi
+        done
+        playwright="${dotfiles}/home/.pi/agent/extensions/browser/node_modules/.bin/playwright-core"
+        if [ -x "$playwright" ]; then
+          $DRY_RUN_CMD "$playwright" install chromium || echo "Chromium install failed - rerun ./rebuild.sh"
+        fi
+      else
+        echo "npm not found yet - rerun ./rebuild.sh once Homebrew has installed node to set up pi extension deps."
+      fi
+    )
+  '';
+  home.file.".pi/agent/skills".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.pi/agent/skills";
+  home.file.".pi/agent/agents".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.pi/agent/agents";
 
 }

@@ -4,5 +4,9 @@
 **/herdr/session.json
 **/herdr/release-notes.json
 **/session-snapshots/**
+**/sessions/**
 **/herdr.sock*
 **/herdr-client*
+# pi extension deps and browser profile (cookies)
+**/.pi/agent/extensions/**/node_modules/
+**/.pi/agent/extensions/browser/.profile/

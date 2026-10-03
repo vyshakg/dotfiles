@@ -1,0 +1,22 @@
+{
+  "lastChangelogVersion": "1.0.0",
+  "theme": "dark",
+  "defaultProvider": "amazon-bedrock",
+  "defaultModel": "us.anthropic.claude-opus-5-5",
+  "defaultThinkingLevel": "xhigh",
+  "packages": [
+    "git:github.com/amosblomqvist/pi-observational-memory@78a1efcfdd46332253fb289724f05b26dfc7769e"
+  ],
+  "interactive-subagents": {
+    "model": "amazon-bedrock/us.anthropic.claude-sonnet-5",
+    "agents": {
+      "scout": "amazon-bedrock/us.openai.gpt-6-luna"
+    }
+  },
+  "observational-memory": {
+    "models": {
+      "observer": { "provider": "amazon-bedrock", "id": "us.openai.gpt-6-luna", "thinking": "medium" },
+      "consolidator": { "provider": "amazon-bedrock", "id": "us.anthropic.claude-sonnet-5", "thinking": "medium" }
+    }
+  }
+}
