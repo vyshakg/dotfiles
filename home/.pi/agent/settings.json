@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.0.0",
+  "lastChangelogVersion": "1.0.1",
   "theme": "dark",
   "defaultProvider": "amazon-bedrock",
   "defaultModel": "us.anthropic.claude-opus-5-5",
@@ -15,8 +15,16 @@
   },
   "observational-memory": {
     "models": {
-      "observer": { "provider": "amazon-bedrock", "id": "us.openai.gpt-6-luna", "thinking": "medium" },
-      "consolidator": { "provider": "amazon-bedrock", "id": "us.anthropic.claude-sonnet-5", "thinking": "medium" }
+      "observer": {
+        "provider": "amazon-bedrock",
+        "id": "us.openai.gpt-6-luna",
+        "thinking": "medium"
+      },
+      "consolidator": {
+        "provider": "amazon-bedrock",
+        "id": "us.anthropic.claude-sonnet-5",
+        "thinking": "high"
+      }
     }
   }
 }
