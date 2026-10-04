@@ -98,7 +98,7 @@ const QuizParams = Type.Object({
 	),
 	options: Type.Array(OptionSchema, {
 		description:
-			"The answer options (2 or more). Options only — there is no free-text mode. Give each option a stable `value`; you reference the correct one by that value in correctAnswer.",
+			'The answer options (2 or more). Options only — there is no free-text mode. Give each option a stable, short descriptive `value` (e.g. "escalate", not "d"); you reference the correct one by that value in correctAnswer. Options are shuffled and numbered 1..N on screen, so the order you write them in is not the order the user sees.',
 		minItems: 2,
 	}),
 	multiSelect: Type.Optional(
@@ -110,7 +110,7 @@ const QuizParams = Type.Object({
 	}),
 	explanation: Type.String({
 		description:
-			"REQUIRED. Explanation revealed AFTER the user answers (shown whether they got it right or wrong). Use it to reinforce why the correct answer is correct.",
+			"REQUIRED. Explanation revealed AFTER the user answers (shown whether they got it right or wrong). Use it to reinforce why the correct answer is correct. Never refer to an option by letter or position ('(B)', 'option 2', 'the first one') — options are shuffled, so such references point at the wrong option. Refer to an option by its content, or write {{value}} (an option's value in double braces, e.g. {{escalate}}), which is replaced with the number the user actually sees.",
 	}),
 	shuffle: Type.Optional(
 		Type.Boolean({
@@ -194,6 +194,34 @@ function resolveCorrect(
 	return { indices: Array.from(new Set(indices)).sort((a, b) => a - b) };
 }
 
+// Replace {{value}} placeholders in the explanation with the option's 1-based
+// POST-shuffle display number. The explanation is authored in the tool call,
+// before execute() shuffles, so any literal positional reference the author
+// writes ("(D)", "option 2") is frozen in authoring order and points at the
+// wrong option on screen. Keying by value instead lets the author refer to an
+// option without knowing where it will land. An unknown value is a hard error,
+// mirroring correctAnswer, so a typo can't silently render as literal braces.
+const PLACEHOLDER_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
+
+function resolvePlaceholders(text: string, options: QuizOption[]): { text: string; error?: string } {
+	const byValue = new Map(options.map((o, i) => [o.value, i + 1]));
+	const unknown: string[] = [];
+	const out = text.replace(PLACEHOLDER_RE, (match, raw: string) => {
+		const idx = byValue.get(raw.trim());
+		if (idx === undefined) {
+			unknown.push(raw.trim());
+			return match;
+		}
+		return String(idx);
+	});
+	if (unknown.length > 0) {
+		const known = options.map((o) => `"${o.value}"`).join(", ");
+		const bad = unknown.map((v) => `{{${v}}}`).join(", ");
+		return { text, error: `explanation placeholder ${bad} does not match any option value (${known})` };
+	}
+	return { text: out };
+}
+
 function createEditorTheme(theme: any): EditorTheme {
 	return {
 		borderColor: (s) => theme.fg("accent", s),
@@ -273,6 +301,10 @@ function buildResult(
 	const correct = dontKnow ? false : isCorrect(selectedIndices, correctIndices);
 	const correctStr = correctIndices.map((i) => formatOptionRef(options, i)).join(", ");
 	const displayedOptions: DisplayedOption[] = options.map((o, i) => ({ index: i + 1, label: o.label }));
+	// The model only sees `content`, never `details`, so without this it has no
+	// way to know where its options landed after shuffling and would keep using
+	// its authoring order (often A/B/C/D) when talking about distractors.
+	const shownStr = options.map((o, i) => `${i + 1}. ${o.label} [value: ${o.value}]`).join("\n");
 
 	let text: string;
 	if (dontKnow) {
@@ -287,6 +319,9 @@ function buildResult(
 		text = `User answered ${verdict}.\nSelected: ${selectedStr}\nCorrect: ${correctStr}`;
 		if (note) text += `\nUser's note: ${note}`;
 	}
+	text +=
+		"\nOptions as numbered on the user's screen (shuffled — NOT your authoring order; use these numbers or the option's content when referring to options):\n" +
+		shownStr;
 	if (explanation) text += `\nExplanation: ${explanation}`;
 
 	return {
@@ -894,7 +929,9 @@ export default function quiz(pi: ExtensionAPI) {
 			"Guardrail: every distractor must be unambiguously wrong on the intended reading — tempting, but a real error, not a defensible alternative. Don't drift into trick questions.",
 			"Anti-guessing hygiene: don't let the correct answer stand out by form (longest, most precise, most hedged, or the only one in the right format). Keep options similar in length, specificity, and phrasing so it can't be picked from shape alone.",
 			"Set multiSelect: true only when more than one option is correct.",
-			"Options are shuffled before display by default, so don't worry about which position you list the correct answer in. Set shuffle: false only when option order is meaningful (ordered values, or an 'All/None of the above' option that must stay last).",
+			"Options are shuffled before display by default and numbered 1..N on screen, so the order you write them in is NOT the order the user sees. Set shuffle: false only when option order is meaningful (ordered values, or an 'All/None of the above' option that must stay last).",
+			"Never refer to an option by letter or position ('(B)', 'B is wrong', 'option 2', 'the first one') in explanation or details — after shuffling those references point at the wrong option. Refer to an option by its content ('escalating to a human'), or write {{value}} in the explanation (e.g. {{escalate}}), which is replaced with the number the user actually sees.",
+			"Give options short descriptive values ('escalate', 'ask-id'), not letters like a/b/c/d — letter values invite letter-based references that won't match the shuffled, numbered display.",
 			"To probe nuance, ask several quick quiz questions and adapt each one based on the previous answers, rather than writing one giant question.",
 			"Don't leak the answer through formatting: keep option phrasing/length even and don't hint which is correct.",
 		],
@@ -902,7 +939,7 @@ export default function quiz(pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const context = params.details?.trim() || undefined;
-			const explanation = params.explanation.trim();
+			const rawExplanation = params.explanation.trim();
 			const mode: QuizMode = params.multiSelect ? "multi-select" : "single-select";
 
 			let options: QuizOption[];
@@ -918,21 +955,13 @@ export default function quiz(pi: ExtensionAPI) {
 				options = shuffleOptions(options);
 			}
 
-			// Emit the true (post-shuffle) display order immediately, before the UI
-			// blocks on the user's answer. Listeners such as md-log rely on this to
-			// show the question in the SAME order the user actually sees it, instead
-			// of the pre-shuffle order the agent originally wrote in its tool call.
-			// Deliberately omits correctIndices/explanation — this fires before the
-			// user has answered and must not leak the answer.
-			onUpdate?.({
-				content: [{ type: "text", text: "Awaiting user response..." }],
-				details: { options: options.map((o, i) => ({ index: i + 1, label: o.label })) },
-			});
-
 			const { indices: correctIndices, error: correctError } = resolveCorrect(
 				params.correctAnswer as string | string[],
 				options,
 			);
+
+			// Must run AFTER shuffling: placeholders resolve to display numbers.
+			const { text: explanation, error: placeholderError } = resolvePlaceholders(rawExplanation, options);
 
 			if (signal?.aborted) {
 				return cancelledResult(params.question, mode, correctIndices, context);
@@ -952,11 +981,26 @@ export default function quiz(pi: ExtensionAPI) {
 				return unavailableResult(params.question, mode, `quiz ${correctError}`, correctIndices, context);
 			}
 
+			if (placeholderError) {
+				return unavailableResult(params.question, mode, `quiz ${placeholderError}`, correctIndices, context);
+			}
+
 			if (!ctx.hasUI) {
 				return unavailableResult(params.question, mode, "quiz requires interactive mode UI", correctIndices, context);
 			}
 
 			return withUILock(async () => {
+				// Emit the true (post-shuffle) display order right before the UI
+				// shows it. Listeners such as md-log rely on this to log the question
+				// in the SAME order the user sees, instead of the pre-shuffle order in
+				// the tool call. Fired only after validation (so a rejected quiz is
+				// never logged) and inside the lock (so it's logged when actually
+				// displayed, not while queued behind another pop-up). Deliberately
+				// omits correctIndices/explanation — it must not leak the answer.
+				onUpdate?.({
+					content: [{ type: "text", text: "Awaiting user response..." }],
+					details: { options: options.map((o, i) => ({ index: i + 1, label: o.label })) },
+				});
 				const response =
 					mode === "single-select"
 						? await askSingleChoice(ctx, params.question, context, options, correctIndices, explanation)

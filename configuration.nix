@@ -50,6 +50,7 @@
       "hashicorp/tap/terraform"
       "gh"
       "librsvg"
+      "poppler"
     ];
     casks = [
       "wezterm"
