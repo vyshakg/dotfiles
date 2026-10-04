@@ -3,6 +3,7 @@
 let
   dotfiles = "${config.home.homeDirectory}/.dotfiles";
   githubSshKey = "${config.home.homeDirectory}/.ssh/id_ed25519_github";
+  digitalOceanSshKey = "${config.home.homeDirectory}/.ssh/id_ed25519_do";
   githubUsername = "vyshakg";
   githubEmail = "vyshak.g.gowda@gmail.com";
   nvmScript = "/opt/homebrew/opt/nvm/nvm.sh";
@@ -25,7 +26,10 @@ in
     nerd-fonts.hack
   ];
   fonts.fontconfig.enable = true;
-  home.sessionVariables.EDITOR = "nvim";
+  home.sessionVariables = {
+    EDITOR = "nvim";
+    NODE_EXTRA_CA_CERTS = "/etc/ssl/certs/ca-certificates.crt";
+  };
   home.sessionPath = [ "${config.home.homeDirectory}/.local/bin" ];
 
   programs.zsh = {
@@ -56,7 +60,17 @@ in
     fi
   '';
 
-  home.activation.installNodeStable = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+  home.activation.generateDigitalOceanSshKey = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    if [ ! -f "${digitalOceanSshKey}" ]; then
+      $DRY_RUN_CMD mkdir -p "${config.home.homeDirectory}/.ssh"
+      $DRY_RUN_CMD chmod 700 "${config.home.homeDirectory}/.ssh"
+      $DRY_RUN_CMD ${pkgs.openssh}/bin/ssh-keygen -t ed25519 -f "${digitalOceanSshKey}" -N "" -C "${githubUsername}@digitalocean"
+      echo "Generated a new DigitalOcean SSH key. Add this public key at https://cloud.digitalocean.com/account/security:"
+      $DRY_RUN_CMD cat "${digitalOceanSshKey}.pub"
+    fi
+  '';
+
+  home.activation.installNodeStable =lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     if [ -s "${nvmScript}" ]; then
       (
         export PATH="/usr/bin:/usr/sbin:/bin:$PATH"
@@ -138,6 +152,8 @@ in
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/settings.json";
   home.file.".claude/statusline.sh".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/statusline.sh";
+  home.file.".claude/hooks/herdr-agent-state.sh".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/hooks/herdr-agent-state.sh";
   home.file.".claude/hooks/md-log.mjs".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/hooks/md-log.mjs";
   home.file.".pi/agent/settings.json".source =
