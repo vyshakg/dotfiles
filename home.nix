@@ -156,6 +156,15 @@ in
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/hooks/herdr-agent-state.sh";
   home.file.".claude/hooks/md-log.mjs".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/hooks/md-log.mjs";
+  home.file.".claude/commands".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/commands";
+  # Per-skill links: ~/.claude/skills also holds app-managed content (synced/)
+  home.file.".claude/skills/grill-with-docs".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/skills/grill-with-docs";
+  home.file.".claude/skills/grilling".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/skills/grilling";
+  home.file.".claude/skills/domain-modeling".source =
+    config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.claude/skills/domain-modeling";
   home.file.".pi/agent/settings.json".source =
     config.lib.file.mkOutOfStoreSymlink "${dotfiles}/home/.pi/agent/settings.json";
   home.file.".pi/agent/extensions".source =

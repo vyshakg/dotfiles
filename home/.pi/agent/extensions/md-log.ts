@@ -23,16 +23,133 @@
  *
  * Append-only. No send-back-to-agent functionality (that lived in the old
  * .md-link extension this was modeled on).
+ *
+ * Optional presentation features, all off by default. Enable them in
+ * ~/.pi/agent/md-log.json (re-read on every write), e.g.
+ * {"timestamps": true, "dateHeadings": true}:
+ *   timestamps     — clock time in every block title ("YOU · 14:32")
+ *   dateHeadings   — "## 📅 Mon 12 Oct 2026" heading whenever the day changes
+ *   elapsed        — time since the prompt a reply answers ("PI · 14:32 · +12s")
+ *   turnDividers   — horizontal rule before each prompt
+ *   sessionHeader  — info callout (cwd, model, session id) when linking
+ *   timeFormat     — "24h" (default) or "12h"
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 const QA_TOOLS = new Set(["quiz", "ask_user_question"]);
 
+const CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "md-log.json");
+
+interface Config {
+	timestamps: boolean;
+	dateHeadings: boolean;
+	elapsed: boolean;
+	turnDividers: boolean;
+	sessionHeader: boolean;
+	timeFormat: "24h" | "12h";
+}
+
+const DEFAULT_CONFIG: Config = {
+	timestamps: false,
+	dateHeadings: false,
+	elapsed: false,
+	turnDividers: false,
+	sessionHeader: false,
+	timeFormat: "24h",
+};
+
+function loadConfig(): Config {
+	try {
+		const user = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+		return user && typeof user === "object" && !Array.isArray(user) ? { ...DEFAULT_CONFIG, ...user } : DEFAULT_CONFIG;
+	} catch {
+		return DEFAULT_CONFIG;
+	}
+}
+
+type TimeLike = Date | string | number | undefined;
+
+/**
+ * Blocks stay structured until write time so presentation options (timestamps,
+ * headings, dividers) can be applied uniformly. Give either `lines` (quoted
+ * inside the callout) or `text` (rendered below the callout title). `since` is
+ * the start of the turn a reply belongs to, for the elapsed option.
+ */
+interface Block {
+	kind: "user" | "assistant" | "question" | "answer" | "header";
+	type: string;
+	title: string;
+	ts: Date;
+	lines?: string[];
+	text?: string;
+	since?: Date;
+}
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+function toDate(ts: TimeLike): Date {
+	const d = new Date(ts ?? Date.now());
+	return Number.isNaN(d.getTime()) ? new Date() : d;
+}
+
+function clock(d: Date, cfg: Config): string {
+	if (cfg.timeFormat === "12h") return `${d.getHours() % 12 || 12}:${pad(d.getMinutes())} ${d.getHours() < 12 ? "AM" : "PM"}`;
+	return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const dayKey = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+const dayHeading = (d: Date) =>
+	`## 📅 ${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}`;
+
+function duration(ms: number): string {
+	const s = Math.round(ms / 1000);
+	if (s < 1) return "";
+	if (s < 60) return `${s}s`;
+	const m = Math.floor(s / 60);
+	return m < 60 ? `${m}m ${pad(s % 60)}s` : `${Math.floor(m / 60)}h ${pad(m % 60)}m`;
+}
+
+function renderBlock(b: Block, cfg: Config): string {
+	const meta: string[] = [];
+	if (cfg.timestamps) meta.push(clock(b.ts, cfg));
+	if (cfg.elapsed && b.since) {
+		const elapsed = duration(b.ts.getTime() - b.since.getTime());
+		if (elapsed) meta.push(`+${elapsed}`);
+	}
+	const head = `> [!${b.type}] ${b.title}${meta.length ? ` · ${meta.join(" · ")}` : ""}`;
+	if (b.text !== undefined) return `${head}\n\n${b.text}`;
+	return [head, ...(b.lines ?? []).map((line) => (line.length === 0 ? ">" : `> ${line}`))].join("\n");
+}
+
+/**
+ * Render blocks plus date headings / dividers. `lastDay` is the day of the
+ * previous block; returns the new one. A leading "---" in a note would be read
+ * as frontmatter, so no divider is emitted unless something precedes it.
+ */
+function renderBlocks(blocks: Block[], cfg: Config, lastDay: string | undefined, fileHadContent: boolean) {
+	const out: string[] = [];
+	for (const b of blocks) {
+		const day = dayKey(b.ts);
+		if (cfg.dateHeadings && day !== lastDay) {
+			out.push(dayHeading(b.ts));
+			lastDay = day;
+		} else if (cfg.turnDividers && b.kind === "user" && (fileHadContent || out.length > 0)) {
+			out.push("---");
+		}
+		out.push(renderBlock(b, cfg));
+	}
+	return { out, lastDay };
+}
+
 export default function mdLog(pi: ExtensionAPI) {
 	let logFile: string | null = null;
+	let lastDay: string | undefined; // day of the last block written (for dateHeadings)
+	let turnStart: Date | undefined; // when the prompt being answered was submitted (for elapsed)
 
 	// --- State restoration on session restart ---
 
@@ -43,6 +160,8 @@ export default function mdLog(pi: ExtensionAPI) {
 				lastLinkData = entry.data as { file: string | null } | undefined;
 			}
 		}
+		lastDay = undefined;
+		turnStart = undefined;
 		if (lastLinkData?.file) {
 			logFile = lastLinkData.file;
 			const theme = ctx.ui.theme;
@@ -79,18 +198,35 @@ export default function mdLog(pi: ExtensionAPI) {
 		}
 	}
 
-	// --- Formatting ---
-
-	function callout(type: string, title: string, bodyLines: string[]): string {
-		const lines = [`> [!${type}] ${title}`];
-		for (const line of bodyLines) {
-			lines.push(line.length === 0 ? ">" : `> ${line}`);
+	function appendBlocks(...blocks: Block[]): void {
+		if (!logFile || blocks.length === 0) return;
+		let fileHadContent = false;
+		try {
+			fileHadContent = fs.statSync(logFile).size > 0;
+		} catch {
+			// missing file: appendToFile will recreate it
 		}
-		return lines.join("\n");
+		const rendered = renderBlocks(blocks, loadConfig(), lastDay, fileHadContent);
+		lastDay = rendered.lastDay;
+		appendToFile(rendered.out.join("\n\n"));
 	}
 
-	function userBlock(text: string): string {
-		return `> [!quote] YOU\n\n${text}`;
+	// --- Formatting ---
+
+	function callout(kind: Block["kind"], type: string, title: string, bodyLines: string[], ts?: TimeLike): Block {
+		return { kind, type, title, ts: toDate(ts), lines: bodyLines };
+	}
+
+	function userBlock(text: string, ts?: TimeLike): Block {
+		return { kind: "user", type: "quote", title: "YOU", ts: toDate(ts), text };
+	}
+
+	function sessionHeader(ctx: any, info: { startedAt?: TimeLike; model?: string }): Block {
+		const lines = [`📁 ${ctx.cwd ?? process.cwd()}`];
+		if (info.model) lines.push(`🤖 ${info.model}`);
+		const sid = ctx.sessionManager?.getSessionId?.();
+		if (sid) lines.push(`🆔 ${sid}`);
+		return callout("header", "info", "Pi session", lines, info.startedAt);
 	}
 
 	// Skill declarations (`<skill name="..." ...> ...whole SKILL.md... </skill>`)
@@ -107,15 +243,15 @@ export default function mdLog(pi: ExtensionAPI) {
 		);
 	}
 
-	function assistantBlock(text: string): string {
-		return `> [!abstract] PI\n\n${text}`;
+	function assistantBlock(text: string, ts?: TimeLike, since?: Date): Block {
+		return { kind: "assistant", type: "abstract", title: "PI", ts: toDate(ts), text, since };
 	}
 
 	function optionsList(options: Array<{ label: string }>): string[] {
 		return options.map((o, i) => `${i + 1}. ${o.label}`);
 	}
 
-	function questionCallout(label: string, question: string, context: string | undefined, options: Array<{ label: string }>): string {
+	function questionCallout(label: string, question: string, context: string | undefined, options: Array<{ label: string }>, ts?: TimeLike): Block {
 		const body: string[] = [];
 		for (const line of question.split("\n")) body.push(line);
 		if (context) {
@@ -126,16 +262,16 @@ export default function mdLog(pi: ExtensionAPI) {
 			body.push("");
 			body.push(...optionsList(options));
 		}
-		return callout("question", label, body);
+		return callout("question", "question", label, body, ts);
 	}
 
-	function answerCalloutQuiz(details: any): string {
+	function answerCalloutQuiz(details: any, ts?: TimeLike): Block {
 		const status = details?.status;
 		if (status === "cancelled") {
-			return callout("warning", "Quiz — cancelled", ["(user skipped)"]);
+			return callout("answer", "warning", "Quiz — cancelled", ["(user skipped)"], ts);
 		}
 		if (status === "unavailable") {
-			return callout("warning", "Quiz — unavailable", [details?.message || ""]);
+			return callout("answer", "warning", "Quiz — unavailable", [details?.message || ""], ts);
 		}
 		// "I don't know" is neither correct nor incorrect — it's a distinct signal,
 		// so it never renders as a red ✗.
@@ -174,16 +310,16 @@ export default function mdLog(pi: ExtensionAPI) {
 			body.push("");
 			for (const line of String(details.explanation).split("\n")) body.push(line);
 		}
-		return callout(type, title, body);
+		return callout("answer", type, title, body, ts);
 	}
 
-	function answerCalloutAsk(details: any): string {
+	function answerCalloutAsk(details: any, ts?: TimeLike): Block {
 		const status = details?.status;
 		if (status === "cancelled") {
-			return callout("warning", "Question — cancelled", ["(user skipped)"]);
+			return callout("answer", "warning", "Question — cancelled", ["(user skipped)"], ts);
 		}
 		if (status === "unavailable") {
-			return callout("warning", "Question — unavailable", [details?.message || ""]);
+			return callout("answer", "warning", "Question — unavailable", [details?.message || ""], ts);
 		}
 		const answers: any[] = details?.answers || [];
 		const body: string[] = answers.map((a) => {
@@ -192,7 +328,7 @@ export default function mdLog(pi: ExtensionAPI) {
 			return `${a.index}. ${a.label}`;
 		});
 		if (body.length === 0) body.push("(no answer)");
-		return callout("example", "Answer", body);
+		return callout("answer", "example", "Answer", body, ts);
 	}
 
 	// --- Event handlers ---
@@ -210,7 +346,9 @@ export default function mdLog(pi: ExtensionAPI) {
 					: "";
 			const trimmed = stripSkillBlocks(text.trim());
 			if (!trimmed) return;
-			await withLock(() => appendToFile(userBlock(trimmed)));
+			const ts = toDate((msg as any).timestamp);
+			turnStart = ts;
+			await withLock(() => appendBlocks(userBlock(trimmed, ts)));
 			return;
 		}
 
@@ -220,7 +358,8 @@ export default function mdLog(pi: ExtensionAPI) {
 				.map((c: any) => (c.text as string).trim())
 				.filter((t: string) => t.length > 0);
 			if (textParts.length === 0) return;
-			await withLock(() => appendToFile(assistantBlock(textParts.join("\n\n"))));
+			const block = assistantBlock(textParts.join("\n\n"), (msg as any).timestamp, turnStart);
+			await withLock(() => appendBlocks(block));
 			return;
 		}
 		// toolResult messages are handled by the tool_result event (for QA tools).
@@ -238,7 +377,7 @@ export default function mdLog(pi: ExtensionAPI) {
 		const context: string | undefined = input.details?.trim() || undefined;
 		const options: Array<{ label: string }> = Array.isArray(input.options) ? input.options : [];
 		const block = questionCallout("Question", question, context, options);
-		await withLock(() => appendToFile(block));
+		await withLock(() => appendBlocks(block));
 	});
 
 	// quiz DOES shuffle its options inside execute(), so the tool_call args are
@@ -262,7 +401,7 @@ export default function mdLog(pi: ExtensionAPI) {
 		const context: string | undefined = input.details?.trim() || undefined;
 		const options = shuffled.map((o) => ({ label: o.label }));
 		const block = questionCallout("Quiz", question, context, options);
-		await withLock(() => appendToFile(block));
+		await withLock(() => appendBlocks(block));
 	});
 
 	pi.on("tool_result", async (event, _ctx) => {
@@ -273,7 +412,7 @@ export default function mdLog(pi: ExtensionAPI) {
 		const block = toolName === "quiz"
 			? answerCalloutQuiz(details)
 			: answerCalloutAsk(details);
-		await withLock(() => appendToFile(block));
+		await withLock(() => appendBlocks(block));
 	});
 
 	// --- Commands ---
@@ -306,6 +445,7 @@ export default function mdLog(pi: ExtensionAPI) {
 			}
 
 			logFile = resolved;
+			lastDay = undefined;
 			pi.appendEntry("md-log", { file: resolved });
 
 			// Backfill the active branch.
@@ -329,6 +469,8 @@ export default function mdLog(pi: ExtensionAPI) {
 			}
 			const name = path.basename(logFile);
 			logFile = null;
+			lastDay = undefined;
+			turnStart = undefined;
 			pi.appendEntry("md-log", { file: null });
 			ctx.ui.setStatus("md-log", undefined);
 			ctx.ui.notify(`Unlinked: ${name}`, "info");
@@ -369,13 +511,17 @@ export default function mdLog(pi: ExtensionAPI) {
 		// Track tool-call args from assistant messages so we can pair with results.
 		const toolCallArgs = new Map<string, { name: string; args: any }>();
 
-		const blocks: string[] = [];
+		const blocks: Block[] = [];
+		const info: { startedAt?: TimeLike; model?: string } = {};
+		let backfillTurnStart: Date | undefined;
 		let count = 0;
 		for (const entry of chain) {
 			if (entry.type !== "message") continue;
 			const msg = entry.message;
 			if (!msg || !("role" in msg)) continue;
 			count++;
+			const ts: TimeLike = entry.timestamp ?? msg.timestamp;
+			info.startedAt ??= ts;
 
 			if (msg.role === "user") {
 				const text = typeof msg.content === "string"
@@ -384,11 +530,15 @@ export default function mdLog(pi: ExtensionAPI) {
 						? msg.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n")
 						: "";
 				const trimmed = stripSkillBlocks(text.trim());
-				if (trimmed) blocks.push(userBlock(trimmed));
+				if (trimmed) {
+					backfillTurnStart = toDate(ts);
+					blocks.push(userBlock(trimmed, ts));
+				}
 				continue;
 			}
 
 			if (msg.role === "assistant") {
+				if (msg.model) info.model = msg.model;
 				// Index tool calls for later pairing.
 				for (const c of msg.content || []) {
 					if (c.type === "toolCall" && QA_TOOLS.has(c.name)) {
@@ -399,7 +549,7 @@ export default function mdLog(pi: ExtensionAPI) {
 					.filter((c: any) => c.type === "text")
 					.map((c: any) => (c.text as string).trim())
 					.filter((t: string) => t.length > 0);
-				if (textParts.length > 0) blocks.push(assistantBlock(textParts.join("\n\n")));
+				if (textParts.length > 0) blocks.push(assistantBlock(textParts.join("\n\n"), ts, backfillTurnStart));
 				continue;
 			}
 
@@ -420,20 +570,26 @@ export default function mdLog(pi: ExtensionAPI) {
 					const options = shuffled && shuffled.length > 0
 						? shuffled.map((o) => ({ label: o.label }))
 						: (Array.isArray(a.options) ? a.options : []);
-					blocks.push(questionCallout(label, a.question || "", a.details?.trim() || undefined, options));
+					blocks.push(questionCallout(label, a.question || "", a.details?.trim() || undefined, options, ts));
 				}
 				if (msg.toolName === "quiz") {
-					blocks.push(answerCalloutQuiz(msg.details));
+					blocks.push(answerCalloutQuiz(msg.details, ts));
 				} else {
-					blocks.push(answerCalloutAsk(msg.details));
+					blocks.push(answerCalloutAsk(msg.details, ts));
 				}
 				continue;
 			}
 		}
 
+		turnStart = backfillTurnStart;
+		const cfg = loadConfig();
+		if (cfg.sessionHeader) blocks.unshift(sessionHeader(ctx, info));
 		if (blocks.length > 0) {
+			// The file is rewritten from scratch here, so nothing precedes the first block.
+			const rendered = renderBlocks(blocks, cfg, undefined, false);
+			lastDay = rendered.lastDay;
 			try {
-				fs.writeFileSync(logFile, blocks.join("\n\n") + "\n", "utf-8");
+				fs.writeFileSync(logFile, rendered.out.join("\n\n") + "\n", "utf-8");
 			} catch {
 				// ignore
 			}

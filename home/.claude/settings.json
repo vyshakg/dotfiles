@@ -71,17 +71,8 @@
     "command": "~/.claude/statusline.sh",
     "padding": 2
   },
-  "enabledPlugins": {
-    "dart-flutter@dart-flutter": true
-  },
-  "extraKnownMarketplaces": {
-    "dart-flutter": {
-      "source": {
-        "source": "github",
-        "repo": "flutter/agent-plugins"
-      }
-    }
-  },
+  "enabledPlugins": {},
+  "extraKnownMarketplaces": {},
   "effortLevel": "xhigh",
   "modelSettings": {
     "claude-opus-5-5": {

@@ -21,6 +21,15 @@
  * Live flow: user prompt comes from UserPromptSubmit, assistant text is read
  * from the transcript on PostToolUse/Stop, questions are written on PreToolUse
  * (before the user answers) and answers on PostToolUse.
+ *
+ * Optional presentation features, all off by default. Enable them in
+ * ~/.claude/md-log/config.json, e.g. {"timestamps": true, "dateHeadings": true}:
+ *   timestamps     — clock time in every block title ("YOU · 14:32")
+ *   dateHeadings   — "## 📅 Mon 12 Oct 2026" heading whenever the day changes
+ *   elapsed        — time since the prompt a reply answers ("CLAUDE · 14:32 · +12s")
+ *   turnDividers   — horizontal rule before each prompt
+ *   sessionHeader  — info callout (cwd, branch, model, session id) when linking
+ *   timeFormat     — "24h" (default) or "12h"
  */
 
 import fs from "node:fs";
@@ -29,6 +38,26 @@ import path from "node:path";
 
 const STATE_DIR = path.join(os.homedir(), ".claude", "md-log");
 const PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
+
+const DEFAULT_CONFIG = {
+	timestamps: false,
+	dateHeadings: false,
+	elapsed: false,
+	turnDividers: false,
+	sessionHeader: false,
+	timeFormat: "24h",
+};
+
+function loadConfig() {
+	try {
+		const user = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "config.json"), "utf-8"));
+		return user && typeof user === "object" && !Array.isArray(user) ? { ...DEFAULT_CONFIG, ...user } : DEFAULT_CONFIG;
+	} catch {
+		return DEFAULT_CONFIG;
+	}
+}
+
+const config = loadConfig();
 
 // --- State (guarded by a mkdir lock: parallel tool calls fire hooks concurrently) ---
 
@@ -85,16 +114,93 @@ function appendToFile(file, ...blocks) {
 
 // --- Formatting ---
 
-function callout(type, title, bodyLines) {
-	const lines = [`> [!${type}] ${title}`];
-	for (const line of bodyLines) lines.push(line.length === 0 ? ">" : `> ${line}`);
-	return lines.join("\n");
+const pad = (n) => String(n).padStart(2, "0");
+
+function toDate(ts) {
+	const d = new Date(ts ?? Date.now());
+	return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
-const userBlock = (text) => `> [!quote] YOU\n\n${text}`;
-const assistantBlock = (text) => `> [!abstract] CLAUDE\n\n${text}`;
+function clock(d) {
+	if (config.timeFormat === "12h") return `${d.getHours() % 12 || 12}:${pad(d.getMinutes())} ${d.getHours() < 12 ? "AM" : "PM"}`;
+	return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
-function questionBlocks(questions) {
+const dayKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+const dayHeading = (d) =>
+	`## 📅 ${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}`;
+
+function duration(ms) {
+	const s = Math.round(ms / 1000);
+	if (s < 1) return "";
+	if (s < 60) return `${s}s`;
+	const m = Math.floor(s / 60);
+	return m < 60 ? `${m}m ${pad(s % 60)}s` : `${Math.floor(m / 60)}h ${pad(m % 60)}m`;
+}
+
+/**
+ * Blocks stay structured until write time so presentation options (timestamps,
+ * headings, dividers) can be applied uniformly in emit(). Give either `lines`
+ * (quoted inside the callout) or `text` (rendered below the callout title).
+ * `since` is the start of the turn a reply belongs to, for the elapsed option.
+ */
+function block(kind, type, title, { ts, lines, text, since }) {
+	return { kind, type, title, ts: toDate(ts), lines, text, since };
+}
+
+function renderBlock(b) {
+	const meta = [];
+	if (config.timestamps) meta.push(clock(b.ts));
+	if (config.elapsed && b.since) {
+		const elapsed = duration(b.ts - toDate(b.since));
+		if (elapsed) meta.push(`+${elapsed}`);
+	}
+	const head = `> [!${b.type}] ${b.title}${meta.length ? ` · ${meta.join(" · ")}` : ""}`;
+	if (b.text !== undefined) return `${head}\n\n${b.text}`;
+	return [head, ...b.lines.map((line) => (line.length === 0 ? ">" : `> ${line}`))].join("\n");
+}
+
+const hasContent = (file) => {
+	try {
+		return fs.statSync(file).size > 0;
+	} catch {
+		return false;
+	}
+};
+
+/** Render blocks (plus date headings / dividers), append them, and persist state. */
+function emit(sid, state, ...blocks) {
+	const out = [];
+	// A leading "---" in a note would be read as frontmatter, so never start a file with one.
+	const fileHadContent = hasContent(state.file);
+	for (const b of blocks.filter(Boolean)) {
+		const day = dayKey(b.ts);
+		if (config.dateHeadings && day !== state.lastDay) {
+			out.push(dayHeading(b.ts));
+			state.lastDay = day;
+		} else if (config.turnDividers && b.kind === "user" && (fileHadContent || out.length > 0)) {
+			out.push("---");
+		}
+		out.push(renderBlock(b));
+	}
+	appendToFile(state.file, ...out);
+	writeState(sid, state);
+}
+
+const callout = (kind, type, title, lines, ts) => block(kind, type, title, { ts, lines });
+const userBlock = (text, ts) => block("user", "quote", "YOU", { ts, text });
+const assistantBlock = (text, ts, since) => block("assistant", "abstract", "CLAUDE", { ts, text, since });
+
+function sessionHeader(input, info) {
+	const lines = [`📁 ${input.cwd ?? process.cwd()}`];
+	if (info.branch) lines.push(`🌿 ${info.branch}`);
+	if (info.model) lines.push(`🤖 ${info.model}`);
+	lines.push(`🆔 ${input.session_id}`);
+	return callout("header", "info", "Claude Code session", lines, info.startedAt);
+}
+
+function questionBlocks(questions, ts) {
 	return (questions ?? []).map((q) => {
 		const body = String(q.question ?? "").split("\n");
 		const options = q.options ?? [];
@@ -105,14 +211,14 @@ function questionBlocks(questions) {
 			});
 		}
 		if (q.multiSelect) body.push("", "(multiple selections allowed)");
-		return callout("question", q.header ? `Question — ${q.header}` : "Question", body);
+		return callout("question", "question", q.header ? `Question — ${q.header}` : "Question", body, ts);
 	});
 }
 
-function answerBlock(questions, result) {
+function answerBlock(questions, result, ts) {
 	const answers = result?.answers;
 	if (!answers || typeof answers !== "object") {
-		return callout("warning", "Question — cancelled", ["(user skipped)"]);
+		return callout("answer", "warning", "Question — cancelled", ["(user skipped)"], ts);
 	}
 	const body = [];
 	const list = questions?.length ? questions : Object.keys(answers).map((question) => ({ question }));
@@ -129,7 +235,7 @@ function answerBlock(questions, result) {
 		if (note) body.push(`Note: ${note}`);
 	}
 	if (body.length === 0) body.push("(no answer)");
-	return callout("example", "Answer", body);
+	return callout("answer", "example", "Answer", body, ts);
 }
 
 // --- Transcript parsing ---
@@ -203,11 +309,13 @@ function syncAssistant(sid, state, seen) {
 		if (text === seen?.text) seen.found = true;
 		// Already written straight from the Stop hook (transcript lagged behind it).
 		if (text === state.written) state.written = undefined;
-		else blocks.push(assistantBlock(text));
+		else {
+			blocks.push(assistantBlock(text, entry.timestamp, state.turnStart));
+			state.lastSynced = text;
+		}
 	}
-	appendToFile(state.file, ...blocks);
 	state.cursor = lines;
-	writeState(sid, state);
+	emit(sid, state, ...blocks);
 }
 
 /**
@@ -222,10 +330,10 @@ function syncAtStop(sid, state, lastMessage) {
 	for (let i = 0; i < 20 && !flushed(); i++) sleep(100);
 	const seen = { text: last, found: false };
 	syncAssistant(sid, state, seen);
-	if (last && !seen.found) {
-		appendToFile(state.file, assistantBlock(last));
+	// lastSynced: an earlier hook this turn already read the reply from the transcript.
+	if (last && !seen.found && last !== state.lastSynced) {
 		state.written = last;
-		writeState(sid, state);
+		emit(sid, state, assistantBlock(last, undefined, state.turnStart));
 	}
 }
 
@@ -234,32 +342,40 @@ function backfill(transcript) {
 	const { entries, lines } = readTranscript(transcript);
 	const questionsById = new Map();
 	const blocks = [];
+	const info = {};
+	let turnStart;
 	for (const entry of entries) {
 		if (!entry || entry.isSidechain) continue;
 		const content = entry.message?.content;
+		info.startedAt ??= entry.timestamp;
+		info.branch = entry.gitBranch || info.branch;
 
 		if (entry.type === "user" && !entry.isMeta) {
 			const toolResult = Array.isArray(content) && content.find((c) => c?.type === "tool_result");
 			if (toolResult) {
 				const questions = questionsById.get(toolResult.tool_use_id);
-				if (questions) blocks.push(answerBlock(questions, entry.toolUseResult));
+				if (questions) blocks.push(answerBlock(questions, entry.toolUseResult, entry.timestamp));
 				continue;
 			}
 			const text = cleanUserText(textOf(content).trim());
-			if (text && !isMdLogCommand(text)) blocks.push(userBlock(text));
+			if (text && !isMdLogCommand(text)) {
+				turnStart = entry.timestamp;
+				blocks.push(userBlock(text, entry.timestamp));
+			}
 		} else if (entry.type === "assistant") {
+			if (entry.message?.model && entry.message.model !== "<synthetic>") info.model = entry.message.model;
 			// Text precedes its tool_use in the same turn, so emit it first.
 			const text = assistantText(entry);
-			if (text) blocks.push(assistantBlock(text));
+			if (text) blocks.push(assistantBlock(text, entry.timestamp, turnStart));
 			for (const c of Array.isArray(content) ? content : []) {
 				if (c?.type === "tool_use" && c.name === "AskUserQuestion") {
 					questionsById.set(c.id, c.input?.questions ?? []);
-					blocks.push(...questionBlocks(c.input?.questions));
+					blocks.push(...questionBlocks(c.input?.questions, entry.timestamp));
 				}
 			}
 		}
 	}
-	return { blocks, lines };
+	return { blocks, lines, info, turnStart };
 }
 
 // --- Commands ---
@@ -277,9 +393,9 @@ function handleLink(input, arg) {
 	return withLock(input.session_id, () => {
 		if (readState(input.session_id)?.file === resolved) return `Already linked: ${resolved}`;
 		const transcript = input.transcript_path ?? findTranscript(input.session_id);
-		const { blocks, lines } = transcript ? backfill(transcript) : { blocks: [], lines: 0 };
-		appendToFile(resolved, ...blocks);
-		writeState(input.session_id, { file: resolved, transcript, cursor: lines });
+		const { blocks, lines, info, turnStart } = transcript ? backfill(transcript) : { blocks: [], lines: 0, info: {} };
+		const header = config.sessionHeader ? [sessionHeader(input, info)] : [];
+		emit(input.session_id, { file: resolved, transcript, cursor: lines, turnStart }, ...header, ...blocks);
 		return `Linked: ${resolved} (${blocks.length} blocks backfilled)`;
 	});
 }
@@ -310,7 +426,10 @@ function main() {
 		}
 		withLock(sid, () => {
 			const state = readState(sid);
-			if (state) appendToFile(state.file, userBlock(prompt));
+			if (!state) return;
+			state.turnStart = new Date().toISOString();
+			state.lastSynced = undefined;
+			emit(sid, state, userBlock(prompt));
 		});
 		return;
 	}
@@ -324,10 +443,10 @@ function main() {
 		if (input.hook_event_name === "PreToolUse" && isAsk) {
 			// Flush preceding prose first so the question lands after it.
 			syncAssistant(sid, state);
-			appendToFile(state.file, ...questionBlocks(input.tool_input?.questions));
+			emit(sid, state, ...questionBlocks(input.tool_input?.questions));
 		} else if (input.hook_event_name === "PostToolUse" && isAsk) {
 			syncAssistant(sid, state);
-			appendToFile(state.file, answerBlock(input.tool_input?.questions, input.tool_response));
+			emit(sid, state, answerBlock(input.tool_input?.questions, input.tool_response));
 		} else if (input.hook_event_name === "Stop") {
 			syncAtStop(sid, state, input.last_assistant_message);
 		} else {
