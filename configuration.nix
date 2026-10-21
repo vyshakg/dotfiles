@@ -47,6 +47,7 @@
       "openjdk@21"
       "cocoapods"
       "doctl"
+      "awscli"
       "hashicorp/tap/terraform"
       "gh"
       "librsvg"
@@ -68,6 +69,8 @@
       "automic-vault/isotopes/automic-vault"
       #"flutter"
       "citrix-workspace"
+      "cursor"
+      "grok-bot"
     ];
   };
 }
