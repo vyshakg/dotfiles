@@ -79,7 +79,7 @@
       "effortLevel": "xhigh"
     },
     "claude-sonnet-5-5": {
-      "effortLevel": "high"
+      "effortLevel": "medium"
     }
   },
   "tui": "fullscreen",
