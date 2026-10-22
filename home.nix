@@ -92,7 +92,21 @@ in
     fi
   '';
 
-  home.activation.installPythonStable = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+  home.activation.installMermaidCli = lib.hm.dag.entryAfter [ "installNodeStable" ] ''
+    (
+      export PATH="/opt/homebrew/bin:/usr/bin:/usr/sbin:/bin:$PATH"
+      export NVM_DIR="${config.home.homeDirectory}/.nvm"
+      [ -s "${nvmScript}" ] && . "${nvmScript}"
+      if command -v npm >/dev/null; then
+        $DRY_RUN_CMD npm install -g --allow-scripts=puppeteer --no-audit --no-fund @mermaid-js/mermaid-cli \
+          || echo "mermaid-cli install failed - rerun ./rebuild.sh"
+      else
+        echo "npm not found yet - rerun ./rebuild.sh once Homebrew has installed node to install mermaid-cli."
+      fi
+    )
+  '';
+
+  home.activation.installPythonStable =lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     if [ -x "${uvScript}" ]; then
       (
         export PATH="/usr/bin:/usr/sbin:/bin:$PATH"
