@@ -52,6 +52,7 @@
       "gh"
       "librsvg"
       "poppler"
+      "ollama"
     ];
     casks = [
       "google-chrome"
