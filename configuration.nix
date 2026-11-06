@@ -73,7 +73,7 @@
       "cursor"
       "grok-bot"
       "codex"
-      "google-gemini",
+      "google-gemini"
       "herdr-app"
     ];
   };
