@@ -72,6 +72,9 @@
       "citrix-workspace"
       "cursor"
       "grok-bot"
+      "codex"
+      "google-gemini",
+      "herdr-app"
     ];
   };
 }
