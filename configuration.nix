@@ -44,7 +44,7 @@
       "nvm"
       "pi-coding-agent"
       "uv"
-      "openjdk@21"
+      #"openjdk@21"
       "cocoapods"
       "doctl"
       "awscli"
@@ -53,6 +53,8 @@
       "librsvg"
       "poppler"
       "ollama"
+      #"go"
+      #"rust"
     ];
     casks = [
       "google-chrome"
@@ -75,6 +77,8 @@
       "codex"
       "google-gemini"
       "herdr-app"
+      "stablyai/orca/orca"
+      "antigravity-cli"
     ];
   };
 }
